@@ -25,9 +25,7 @@ std::string compute(const std::string &x_path, const std::string &y_path, float 
     auto x = read_vec(x_path, n);
     auto y = read_vec(y_path, n);
 
-    for (int i = 0; i < n; ++i) {
-        y[i] = static_cast<double>(alpha) * x[i] + y[i];
-    }
+    // write code here
 
     return write_vec(y);
 }
