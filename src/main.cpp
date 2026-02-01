@@ -1,34 +1,32 @@
 /**
- * AXPY (Y = alpha * X + Y) - Push 9: Fast C-style I/O
+ * AXPY (Y = alpha * X + Y) - Push 10: No software prefetching
  * 
- * Change: Replace C++ fstream with C fread/fwrite for faster I/O
+ * Change: Remove _mm_prefetch, rely on hardware prefetcher
  * 
  * Target: Intel Xeon Bronze 3204 with AVX2 + FMA support
  */
 
 #include <vector>
+#include <fstream>
 #include <string>
 #include <filesystem>
 #include <studentlib.h>
 #include <immintrin.h>
-#include <cstdio>
 
 namespace solution {
 namespace {
 
 std::vector<double> read_vec(const std::string &path, int n) {
     std::vector<double> data(n);
-    FILE* f = fopen(path.c_str(), "rb");
-    fread(data.data(), sizeof(double), n, f);
-    fclose(f);
+    std::ifstream in(path, std::ios::binary);
+    in.read(reinterpret_cast<char*>(data.data()), sizeof(double) * n);
     return data;
 }
 
 std::string write_vec(const std::vector<double> &data) {
     const std::string out_path = (std::filesystem::temp_directory_path() / "axpy_out.dat").string();
-    FILE* f = fopen(out_path.c_str(), "wb");
-    fwrite(data.data(), sizeof(double), data.size(), f);
-    fclose(f);
+    std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(data.data()), sizeof(double) * data.size());
     return out_path;
 }
 
@@ -44,10 +42,8 @@ void axpy_simd_fma(double alpha,
     
     size_t i = 0;
     
+    // Main loop WITHOUT prefetching - let hardware prefetcher handle it
     for (; i + BLOCK_SIZE <= n; i += BLOCK_SIZE) {
-        _mm_prefetch(reinterpret_cast<const char*>(&X[i + 32]), _MM_HINT_T0);
-        _mm_prefetch(reinterpret_cast<const char*>(&Y[i + 32]), _MM_HINT_T0);
-        
         __m256d x0 = _mm256_loadu_pd(&X[i]);
         __m256d x1 = _mm256_loadu_pd(&X[i + 4]);
         __m256d x2 = _mm256_loadu_pd(&X[i + 8]);
