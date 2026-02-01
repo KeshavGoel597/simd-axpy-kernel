@@ -1,10 +1,17 @@
 /**
- * AXPY (Y = alpha * X + Y) - v1 Structure with Prefetching
+ * AXPY (Y = alpha * X + Y) - Highly Optimized SIMD Implementation with FMA
  * 
- * Push 7: Restore original v1 structure that achieved 25th place
- * - Separate helper function for SIMD loop
- * - Software prefetching for next iteration
- * - 4x unrolling with FMA
+ * Push 8: Exact restoration of v1 code (17.3ms baseline)
+ * 
+ * Optimizations Applied:
+ * 1. AVX2 256-bit vectors processing 4 doubles per instruction
+ * 2. Alpha broadcasted to vector register OUTSIDE the loop
+ * 3. FMA (Fused Multiply-Add): y = alpha * x + y in single instruction
+ * 4. 4x loop unrolling (16 elements per iteration) to hide latency
+ * 5. Software prefetching for upcoming data
+ * 6. In-place update of Y array for cache efficiency
+ * 
+ * Target: Intel Xeon Bronze 3204 with AVX2 + FMA support
  */
 
 #include <vector>
@@ -31,57 +38,50 @@ std::string write_vec(const std::vector<double> &data) {
     return out_path;
 }
 
-/**
- * SIMD AXPY with FMA and 4x Unrolling + Prefetching
- */
 void axpy_simd_fma(double alpha, 
                    const double* __restrict__ X, 
                    double* __restrict__ Y, 
                    size_t n) {
-    const __m256d alpha_vec = _mm256_set1_pd(alpha);
+    const size_t AVX_WIDTH = 4;
+    const size_t UNROLL_FACTOR = 4;
+    const size_t BLOCK_SIZE = AVX_WIDTH * UNROLL_FACTOR;
+    
+    __m256d alpha_vec = _mm256_set1_pd(alpha);
     
     size_t i = 0;
     
-    // Main SIMD loop: 4x unrolled (16 doubles per iteration)
-    for (; i + 16 <= n; i += 16) {
-        // Prefetch data for next iteration (32 doubles ahead = 256 bytes)
+    for (; i + BLOCK_SIZE <= n; i += BLOCK_SIZE) {
         _mm_prefetch(reinterpret_cast<const char*>(&X[i + 32]), _MM_HINT_T0);
         _mm_prefetch(reinterpret_cast<const char*>(&Y[i + 32]), _MM_HINT_T0);
         
-        // Load 4 vectors from X
         __m256d x0 = _mm256_loadu_pd(&X[i]);
         __m256d x1 = _mm256_loadu_pd(&X[i + 4]);
         __m256d x2 = _mm256_loadu_pd(&X[i + 8]);
         __m256d x3 = _mm256_loadu_pd(&X[i + 12]);
         
-        // Load 4 vectors from Y
         __m256d y0 = _mm256_loadu_pd(&Y[i]);
         __m256d y1 = _mm256_loadu_pd(&Y[i + 4]);
         __m256d y2 = _mm256_loadu_pd(&Y[i + 8]);
         __m256d y3 = _mm256_loadu_pd(&Y[i + 12]);
         
-        // FMA: Y = alpha * X + Y
         y0 = _mm256_fmadd_pd(alpha_vec, x0, y0);
         y1 = _mm256_fmadd_pd(alpha_vec, x1, y1);
         y2 = _mm256_fmadd_pd(alpha_vec, x2, y2);
         y3 = _mm256_fmadd_pd(alpha_vec, x3, y3);
         
-        // Store back to Y
         _mm256_storeu_pd(&Y[i], y0);
         _mm256_storeu_pd(&Y[i + 4], y1);
         _mm256_storeu_pd(&Y[i + 8], y2);
         _mm256_storeu_pd(&Y[i + 12], y3);
     }
     
-    // Handle remaining 4-element chunks
-    for (; i + 4 <= n; i += 4) {
+    for (; i + AVX_WIDTH <= n; i += AVX_WIDTH) {
         __m256d x = _mm256_loadu_pd(&X[i]);
         __m256d y = _mm256_loadu_pd(&Y[i]);
         y = _mm256_fmadd_pd(alpha_vec, x, y);
         _mm256_storeu_pd(&Y[i], y);
     }
     
-    // Scalar cleanup
     for (; i < n; ++i) {
         Y[i] = alpha * X[i] + Y[i];
     }
