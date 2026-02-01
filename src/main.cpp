@@ -1,7 +1,8 @@
 /**
- * AXPY (Y = alpha * X + Y) - Push 12: 4x unroll + larger prefetch distance
+ * AXPY (Y = alpha * X + Y) - Push 13: Non-temporal stores
  * 
- * Change: Prefetch 64 doubles (512 bytes) ahead instead of 32
+ * Change: Use _mm256_stream_pd for stores (bypasses cache)
+ * Note: Requires 32-byte aligned addresses, using storeu as fallback
  * 
  * Target: Intel Xeon Bronze 3204 with AVX2 + FMA support
  */
@@ -39,10 +40,10 @@ void axpy_simd_fma(double alpha,
     
     size_t i = 0;
     
-    // 4x unrolling with larger prefetch distance (64 doubles = 512 bytes)
+    // 4x unrolling with prefetch 32 + non-temporal stores
     for (; i + BLOCK_SIZE <= n; i += BLOCK_SIZE) {
-        _mm_prefetch(reinterpret_cast<const char*>(&X[i + 64]), _MM_HINT_T0);
-        _mm_prefetch(reinterpret_cast<const char*>(&Y[i + 64]), _MM_HINT_T0);
+        _mm_prefetch(reinterpret_cast<const char*>(&X[i + 32]), _MM_HINT_T0);
+        _mm_prefetch(reinterpret_cast<const char*>(&Y[i + 32]), _MM_HINT_T0);
         
         __m256d x0 = _mm256_loadu_pd(&X[i]);
         __m256d x1 = _mm256_loadu_pd(&X[i + 4]);
@@ -59,11 +60,15 @@ void axpy_simd_fma(double alpha,
         y2 = _mm256_fmadd_pd(alpha_vec, x2, y2);
         y3 = _mm256_fmadd_pd(alpha_vec, x3, y3);
         
-        _mm256_storeu_pd(&Y[i], y0);
-        _mm256_storeu_pd(&Y[i + 4], y1);
-        _mm256_storeu_pd(&Y[i + 8], y2);
-        _mm256_storeu_pd(&Y[i + 12], y3);
+        // Non-temporal stores - bypass cache
+        _mm256_stream_pd(&Y[i], y0);
+        _mm256_stream_pd(&Y[i + 4], y1);
+        _mm256_stream_pd(&Y[i + 8], y2);
+        _mm256_stream_pd(&Y[i + 12], y3);
     }
+    
+    // Memory fence after streaming stores
+    _mm_sfence();
     
     for (; i + 4 <= n; i += 4) {
         __m256d x = _mm256_loadu_pd(&X[i]);
