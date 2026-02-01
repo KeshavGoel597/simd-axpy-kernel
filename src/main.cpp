@@ -1,40 +1,34 @@
 /**
- * AXPY (Y = alpha * X + Y) - Highly Optimized SIMD Implementation with FMA
+ * AXPY (Y = alpha * X + Y) - Push 9: Fast C-style I/O
  * 
- * Push 8: Exact restoration of v1 code (17.3ms baseline)
- * 
- * Optimizations Applied:
- * 1. AVX2 256-bit vectors processing 4 doubles per instruction
- * 2. Alpha broadcasted to vector register OUTSIDE the loop
- * 3. FMA (Fused Multiply-Add): y = alpha * x + y in single instruction
- * 4. 4x loop unrolling (16 elements per iteration) to hide latency
- * 5. Software prefetching for upcoming data
- * 6. In-place update of Y array for cache efficiency
+ * Change: Replace C++ fstream with C fread/fwrite for faster I/O
  * 
  * Target: Intel Xeon Bronze 3204 with AVX2 + FMA support
  */
 
 #include <vector>
-#include <fstream>
 #include <string>
 #include <filesystem>
 #include <studentlib.h>
 #include <immintrin.h>
+#include <cstdio>
 
 namespace solution {
 namespace {
 
 std::vector<double> read_vec(const std::string &path, int n) {
     std::vector<double> data(n);
-    std::ifstream in(path, std::ios::binary);
-    in.read(reinterpret_cast<char*>(data.data()), sizeof(double) * n);
+    FILE* f = fopen(path.c_str(), "rb");
+    fread(data.data(), sizeof(double), n, f);
+    fclose(f);
     return data;
 }
 
 std::string write_vec(const std::vector<double> &data) {
     const std::string out_path = (std::filesystem::temp_directory_path() / "axpy_out.dat").string();
-    std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(data.data()), sizeof(double) * data.size());
+    FILE* f = fopen(out_path.c_str(), "wb");
+    fwrite(data.data(), sizeof(double), data.size(), f);
+    fclose(f);
     return out_path;
 }
 
