@@ -1,6 +1,8 @@
 /**
- * AXPY ULTIMATE - All optimizations combined
+ * AXPY - PARALLEL I/O VERSION
  * Y = alpha * X + Y
+ * 
+ * Strategy: Read X and Y files simultaneously!
  */
 
 #include <fcntl.h>
@@ -18,92 +20,85 @@ std::string compute(const std::string &x_path, const std::string &y_path, float 
     const size_t sz = n * sizeof(double);
     const double alpha_d = static_cast<double>(alpha);
 
+    // Allocate aligned buffers
     double* X = (double*)aligned_alloc(64, sz);
     double* Y = (double*)aligned_alloc(64, sz);
 
-    // PARALLEL I/O
+    // PARALLEL I/O - Read X and Y simultaneously!
     #pragma omp parallel sections num_threads(2)
     {
         #pragma omp section
         {
             int fx = open(x_path.c_str(), O_RDONLY);
-            posix_fadvise(fx, 0, sz, POSIX_FADV_SEQUENTIAL | POSIX_FADV_WILLNEED);
-            size_t total = 0;
-            while (total < sz) {
-                ssize_t r = read(fx, (char*)X + total, sz - total);
-                if (r <= 0) break;
-                total += r;
-            }
+            read(fx, X, sz);
             close(fx);
         }
 
         #pragma omp section
         {
             int fy = open(y_path.c_str(), O_RDONLY);
-            posix_fadvise(fy, 0, sz, POSIX_FADV_SEQUENTIAL | POSIX_FADV_WILLNEED);
-            size_t total = 0;
-            while (total < sz) {
-                ssize_t r = read(fy, (char*)Y + total, sz - total);
-                if (r <= 0) break;
-                total += r;
-            }
+            read(fy, Y, sz);
             close(fy);
         }
     }
 
-    // PARALLEL COMPUTE with 4 threads
+    // SIMD Compute with FMA - broadcast alpha
     __m256d alpha_vec = _mm256_set1_pd(alpha_d);
 
-    #pragma omp parallel num_threads(4)
-    {
-        int tid = omp_get_thread_num();
-        int nthreads = omp_get_num_threads();
-        size_t chunk = (n / nthreads / 32) * 32;
-        size_t start = tid * chunk;
-        size_t end = (tid == nthreads - 1) ? n : start + chunk;
+    // Main loop: 8x unrolling (32 elements per iteration)
+    size_t i = 0;
+    for (; i + 32 <= (size_t)n; i += 32) {
+        // Process 8 vectors (32 doubles)
+        __m256d x0 = _mm256_load_pd(&X[i]);
+        __m256d x1 = _mm256_load_pd(&X[i+4]);
+        __m256d x2 = _mm256_load_pd(&X[i+8]);
+        __m256d x3 = _mm256_load_pd(&X[i+12]);
+        __m256d x4 = _mm256_load_pd(&X[i+16]);
+        __m256d x5 = _mm256_load_pd(&X[i+20]);
+        __m256d x6 = _mm256_load_pd(&X[i+24]);
+        __m256d x7 = _mm256_load_pd(&X[i+28]);
 
-        // Process 32 elements at a time
-        size_t i = start;
-        for (; i + 32 <= end; i += 32) {
-            __m256d x0 = _mm256_load_pd(&X[i]);
-            __m256d x1 = _mm256_load_pd(&X[i+4]);
-            __m256d x2 = _mm256_load_pd(&X[i+8]);
-            __m256d x3 = _mm256_load_pd(&X[i+12]);
-            __m256d x4 = _mm256_load_pd(&X[i+16]);
-            __m256d x5 = _mm256_load_pd(&X[i+20]);
-            __m256d x6 = _mm256_load_pd(&X[i+24]);
-            __m256d x7 = _mm256_load_pd(&X[i+28]);
+        __m256d y0 = _mm256_load_pd(&Y[i]);
+        __m256d y1 = _mm256_load_pd(&Y[i+4]);
+        __m256d y2 = _mm256_load_pd(&Y[i+8]);
+        __m256d y3 = _mm256_load_pd(&Y[i+12]);
+        __m256d y4 = _mm256_load_pd(&Y[i+16]);
+        __m256d y5 = _mm256_load_pd(&Y[i+20]);
+        __m256d y6 = _mm256_load_pd(&Y[i+24]);
+        __m256d y7 = _mm256_load_pd(&Y[i+28]);
 
-            __m256d y0 = _mm256_load_pd(&Y[i]);
-            __m256d y1 = _mm256_load_pd(&Y[i+4]);
-            __m256d y2 = _mm256_load_pd(&Y[i+8]);
-            __m256d y3 = _mm256_load_pd(&Y[i+12]);
-            __m256d y4 = _mm256_load_pd(&Y[i+16]);
-            __m256d y5 = _mm256_load_pd(&Y[i+20]);
-            __m256d y6 = _mm256_load_pd(&Y[i+24]);
-            __m256d y7 = _mm256_load_pd(&Y[i+28]);
+        // FMA: Y = alpha * X + Y
+        y0 = _mm256_fmadd_pd(alpha_vec, x0, y0);
+        y1 = _mm256_fmadd_pd(alpha_vec, x1, y1);
+        y2 = _mm256_fmadd_pd(alpha_vec, x2, y2);
+        y3 = _mm256_fmadd_pd(alpha_vec, x3, y3);
+        y4 = _mm256_fmadd_pd(alpha_vec, x4, y4);
+        y5 = _mm256_fmadd_pd(alpha_vec, x5, y5);
+        y6 = _mm256_fmadd_pd(alpha_vec, x6, y6);
+        y7 = _mm256_fmadd_pd(alpha_vec, x7, y7);
 
-            _mm256_store_pd(&Y[i], _mm256_fmadd_pd(alpha_vec, x0, y0));
-            _mm256_store_pd(&Y[i+4], _mm256_fmadd_pd(alpha_vec, x1, y1));
-            _mm256_store_pd(&Y[i+8], _mm256_fmadd_pd(alpha_vec, x2, y2));
-            _mm256_store_pd(&Y[i+12], _mm256_fmadd_pd(alpha_vec, x3, y3));
-            _mm256_store_pd(&Y[i+16], _mm256_fmadd_pd(alpha_vec, x4, y4));
-            _mm256_store_pd(&Y[i+20], _mm256_fmadd_pd(alpha_vec, x5, y5));
-            _mm256_store_pd(&Y[i+24], _mm256_fmadd_pd(alpha_vec, x6, y6));
-            _mm256_store_pd(&Y[i+28], _mm256_fmadd_pd(alpha_vec, x7, y7));
-        }
+        // Store back
+        _mm256_store_pd(&Y[i], y0);
+        _mm256_store_pd(&Y[i+4], y1);
+        _mm256_store_pd(&Y[i+8], y2);
+        _mm256_store_pd(&Y[i+12], y3);
+        _mm256_store_pd(&Y[i+16], y4);
+        _mm256_store_pd(&Y[i+20], y5);
+        _mm256_store_pd(&Y[i+24], y6);
+        _mm256_store_pd(&Y[i+28], y7);
+    }
 
-        // Cleanup 4 at a time
-        for (; i + 4 <= end; i += 4) {
-            __m256d x = _mm256_load_pd(&X[i]);
-            __m256d y = _mm256_load_pd(&Y[i]);
-            _mm256_store_pd(&Y[i], _mm256_fmadd_pd(alpha_vec, x, y));
-        }
+    // Cleanup: 4 elements at a time
+    for (; i + 4 <= (size_t)n; i += 4) {
+        __m256d x = _mm256_load_pd(&X[i]);
+        __m256d y = _mm256_load_pd(&Y[i]);
+        y = _mm256_fmadd_pd(alpha_vec, x, y);
+        _mm256_store_pd(&Y[i], y);
+    }
 
-        // Scalar cleanup
-        for (; i < end; ++i) {
-            Y[i] = alpha_d * X[i] + Y[i];
-        }
+    // Scalar cleanup
+    for (; i < (size_t)n; ++i) {
+        Y[i] = alpha_d * X[i] + Y[i];
     }
 
     // Write output
