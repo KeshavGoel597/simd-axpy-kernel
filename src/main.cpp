@@ -1,7 +1,7 @@
 /**
- * AXPY (Y = alpha * X + Y) - Push 14: Exact v1 config (best known)
+ * AXPY (Y = alpha * X + Y) - Push 15: Fully inlined SIMD
  * 
- * Config: 4x unroll + prefetch 32 doubles + regular stores
+ * Change: No helper function, SIMD code directly in compute()
  * 
  * Target: Intel Xeon Bronze 3204 with AVX2 + FMA support
  */
@@ -30,16 +30,21 @@ std::string write_vec(const std::vector<double> &data) {
     return out_path;
 }
 
-void axpy_simd_fma(double alpha, 
-                   const double* __restrict__ X, 
-                   double* __restrict__ Y, 
-                   size_t n) {
-    const size_t BLOCK_SIZE = 16;
-    __m256d alpha_vec = _mm256_set1_pd(alpha);
+} // namespace
+
+std::string compute(const std::string &x_path, const std::string &y_path, float alpha, int n) {
+    auto x = read_vec(x_path, n);
+    auto y = read_vec(y_path, n);
     
+    const double a = static_cast<double>(alpha);
+    const double* __restrict__ X = x.data();
+    double* __restrict__ Y = y.data();
+    const size_t N = static_cast<size_t>(n);
+    
+    __m256d alpha_vec = _mm256_set1_pd(a);
     size_t i = 0;
     
-    for (; i + BLOCK_SIZE <= n; i += BLOCK_SIZE) {
+    for (; i + 16 <= N; i += 16) {
         _mm_prefetch(reinterpret_cast<const char*>(&X[i + 32]), _MM_HINT_T0);
         _mm_prefetch(reinterpret_cast<const char*>(&Y[i + 32]), _MM_HINT_T0);
         
@@ -64,25 +69,16 @@ void axpy_simd_fma(double alpha,
         _mm256_storeu_pd(&Y[i + 12], y3);
     }
     
-    for (; i + 4 <= n; i += 4) {
-        __m256d x = _mm256_loadu_pd(&X[i]);
-        __m256d y = _mm256_loadu_pd(&Y[i]);
-        y = _mm256_fmadd_pd(alpha_vec, x, y);
-        _mm256_storeu_pd(&Y[i], y);
+    for (; i + 4 <= N; i += 4) {
+        __m256d xv = _mm256_loadu_pd(&X[i]);
+        __m256d yv = _mm256_loadu_pd(&Y[i]);
+        yv = _mm256_fmadd_pd(alpha_vec, xv, yv);
+        _mm256_storeu_pd(&Y[i], yv);
     }
     
-    for (; i < n; ++i) {
-        Y[i] = alpha * X[i] + Y[i];
+    for (; i < N; ++i) {
+        Y[i] = a * X[i] + Y[i];
     }
-}
-
-} // namespace
-
-std::string compute(const std::string &x_path, const std::string &y_path, float alpha, int n) {
-    auto x = read_vec(x_path, n);
-    auto y = read_vec(y_path, n);
-
-    axpy_simd_fma(static_cast<double>(alpha), x.data(), y.data(), static_cast<size_t>(n));
 
     return write_vec(y);
 }
