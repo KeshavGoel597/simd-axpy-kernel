@@ -1,1 +1,11 @@
+# Build artifacts
 build/
+*.o
+*.a
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
